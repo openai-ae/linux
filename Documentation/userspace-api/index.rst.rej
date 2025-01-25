@@ -1,0 +1,10 @@
+--- Documentation/userspace-api/index.rst
++++ Documentation/userspace-api/index.rst
+@@ -63,6 +63,7 @@ Everything else
+    vduse
+    futex2
+    perf_ring_buffer
++   ntsync
+ 
+ .. only::  subproject and html
+ 

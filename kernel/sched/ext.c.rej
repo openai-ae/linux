@@ -1,0 +1,19 @@
+--- kernel/sched/ext.c
++++ kernel/sched/ext.c
+@@ -4278,8 +4278,15 @@ void scx_move_task(struct task_struct *p)
+ 	 * cgroup_move(), because cgroup migrations never happen for PF_EXITING
+ 	 * tasks.
+ 	 */
+-	if (task_group_is_autogroup(task_group(p)) || (p->flags & PF_EXITING))
++	if (task_group_is_autogroup(task_group(p)) || (p->flags & PF_EXITING)) {
++		if (WARN_ON_ONCE(p->scx.cgrp_moving_from)) {
++			pr_warn("scx_move_task: %s[%d] autogroup=%d exiting=%d\n",
++				p->comm, p->pid, task_group_is_autogroup(task_group(p)),
++				(bool)(p->flags & PF_EXITING));
++			p->scx.cgrp_moving_from = NULL;
++		}
+ 		return;
++	}
+ 
+ 	/*
+ 	 * @p must have ops.cgroup_prep_move() called on it and thus

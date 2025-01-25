@@ -1,0 +1,377 @@
+--- drivers/hid/hid-asus-ally.c
++++ drivers/hid/hid-asus-ally.c
+@@ -118,6 +163,7 @@ struct ally_rgb_data {
+ 
+ static struct ally_drvdata {
+ 	struct hid_device *hdev;
++	struct ally_x_device *ally_x;
+ 	struct ally_rgb_dev *led_rgb_dev;
+ 	struct ally_rgb_data led_rgb_data;
+ } drvdata;
+@@ -865,7 +1240,8 @@ static int ally_hid_probe(struct hid_device *hdev, const struct hid_device_id *_
+ 	if (ep < 0)
+ 		return ep;
+ 
+-	if (ep != ALLY_CFG_INTF_IN_ADDRESS)
++	if (ep != ALLY_CFG_INTF_IN_ADDRESS ||
++	    ep != ALLY_X_INTERFACE_ADDRESS)
+ 		return -ENODEV;
+ 
+ 	ret = hid_parse(hdev);
+@@ -994,6 +1390,7 @@ static struct hid_driver
+ 			 .id_table = rog_ally_devices,
+ 			 .probe = ally_hid_probe,
+ 			 .remove = ally_hid_remove,
++			 .raw_event = ally_raw_event,
+ 			 /* HID is the better place for resume functions, not pm_ops */
+ 			 .resume = ally_hid_resume,
+ 			 .reset_resume = ally_hid_reset_resume,
+--- drivers/hid/hid-asus-ally.c
++++ drivers/hid/hid-asus-ally.c
+@@ -6,11 +6,8 @@
+  */
+ 
+ #include "linux/device.h"
+-#include "linux/err.h"
+-#include "linux/kstrtox.h"
+ #include "linux/pm.h"
+ #include "linux/slab.h"
+-#include "linux/stddef.h"
+ #include <linux/hid.h>
+ #include <linux/types.h>
+ #include <linux/usb.h>
+@@ -174,6 +226,7 @@ struct ally_rgb_data {
+ static struct ally_drvdata {
+ 	struct hid_device *hdev;
+ 	struct ally_x_device *ally_x;
++	struct ally_gamepad_cfg *gamepad_cfg;
+ 	struct ally_rgb_dev *led_rgb_dev;
+ 	struct ally_rgb_data led_rgb_data;
+ } drvdata;
+@@ -1087,7 +1306,7 @@ static int ally_hid_probe(struct hid_device *hdev, const struct hid_device_id *_
+ 	if (ep < 0)
+ 		return ep;
+ 
+-	if (ep != ALLY_CFG_INTF_IN_ADDRESS ||
++	if (ep != ALLY_CFG_INTF_IN_ADDRESS &&
+ 	    ep != ALLY_X_INTERFACE_ADDRESS)
+ 		return -ENODEV;
+ 
+@@ -1127,7 +1346,13 @@ static int ally_hid_probe(struct hid_device *hdev, const struct hid_device_id *_
+ 		else
+ 			hid_info(hdev, "Created Ally RGB LED controls.\n");
+ 
+-		if (IS_ERR(drvdata.led_rgb_dev))
++		drvdata.gamepad_cfg = ally_gamepad_cfg_create(hdev);
++		if (IS_ERR(drvdata.gamepad_cfg))
++			hid_err(hdev, "Failed to create Ally gamepad attributes.\n");
++		else
++			hid_info(hdev, "Created Ally gamepad attributes.\n");
++
++		if (IS_ERR(drvdata.led_rgb_dev) && IS_ERR(drvdata.gamepad_cfg))
+ 			goto err_close;
+ 	}
+ 
+--- drivers/hid/hid-asus-ally.c
++++ drivers/hid/hid-asus-ally.c
+@@ -5,8 +5,10 @@
+  *  Copyright (c) 2023 Luke Jones <luke@ljones.dev>
+  */
+ 
++#include "linux/compiler_attributes.h"
+ #include "linux/device.h"
+ #include "linux/pm.h"
++#include "linux/printk.h"
+ #include "linux/slab.h"
+ #include <linux/hid.h>
+ #include <linux/types.h>
+@@ -262,6 +264,17 @@ struct deadzone {
+ 	u8 outer;
+ };
+ 
++struct response_curve {
++	uint8_t move_pct_1;
++	uint8_t response_pct_1;
++	uint8_t move_pct_2;
++	uint8_t response_pct_2;
++	uint8_t move_pct_3;
++	uint8_t response_pct_3;
++	uint8_t move_pct_4;
++	uint8_t response_pct_4;
++} __packed;
++
+ /* ROG Ally has many settings related to the gamepad, all using the same n-key endpoint */
+ struct ally_gamepad_cfg {
+ 	struct hid_device *hdev;
+@@ -286,6 +299,9 @@ struct ally_gamepad_cfg {
+ 	/* anti-deadzones */
+ 	u8 ls_adz; // left stick
+ 	u8 rs_adz; // right stick
++	/* joystick response curves */
++	struct response_curve ls_rc;
++	struct response_curve rs_rc;
+ };
+ 
+ /* The hatswitch outputs integers, we use them to index this X|Y pair */
+@@ -709,10 +725,85 @@ static ssize_t axis_xy_right_anti_deadzone_store(struct device *dev,
+ }
+ ALLY_DEVICE_ATTR_RW(axis_xy_right_anti_deadzone, anti_deadzone);
+ 
++/* JS RESPONSE CURVES *****************************************************************************/
++static void _gamepad_set_js_response_curves_default(struct ally_gamepad_cfg *ally_cfg)
++{
++	struct response_curve *js1_rc = &ally_cfg->ls_rc;
++	struct response_curve *js2_rc = &ally_cfg->rs_rc;
++	js1_rc->move_pct_1 = js2_rc->move_pct_1 = 0x16; // 25%
++	js1_rc->move_pct_2 = js2_rc->move_pct_2 = 0x32; // 50%
++	js1_rc->move_pct_3 = js2_rc->move_pct_3 = 0x48; // 75%
++	js1_rc->move_pct_4 = js2_rc->move_pct_4 = 0x64; // 100%
++	js1_rc->response_pct_1 = js2_rc->response_pct_1 = 0x16;
++	js1_rc->response_pct_2 = js2_rc->response_pct_2 = 0x32;
++	js1_rc->response_pct_3 = js2_rc->response_pct_3 = 0x48;
++	js1_rc->response_pct_4 = js2_rc->response_pct_4 = 0x64;
++}
++
++static ssize_t _gamepad_apply_response_curves(struct hid_device *hdev,
++					      struct ally_gamepad_cfg *ally_cfg)
++{
++	u8 *hidbuf;
++	int ret;
++
++	hidbuf = kzalloc(FEATURE_ROG_ALLY_REPORT_SIZE, GFP_KERNEL);
++	if (!hidbuf)
++		return -ENOMEM;
++
++	hidbuf[0] = FEATURE_ROG_ALLY_REPORT_ID;
++	hidbuf[1] = FEATURE_ROG_ALLY_CODE_PAGE;
++	memcpy(&hidbuf[2], &ally_cfg->ls_rc, sizeof(ally_cfg->ls_rc));
++
++	ret = ally_gamepad_check_ready(hdev);
++	if (ret < 0)
++		goto report_fail;
++
++	hidbuf[4] = 0x02;
++	memcpy(&hidbuf[5], &ally_cfg->rs_rc, sizeof(ally_cfg->rs_rc));
++
++	ret = ally_gamepad_check_ready(hdev);
++	if (ret < 0)
++		goto report_fail;
++
++	ret = asus_dev_set_report(hdev, hidbuf, FEATURE_ROG_ALLY_REPORT_SIZE);
++	if (ret < 0)
++		goto report_fail;
++
++report_fail:
++	kfree(hidbuf);
++	return ret;
++}
++
++ALLY_JS_RC_POINT(axis_xy_left, move, 1);
++ALLY_JS_RC_POINT(axis_xy_left, move, 2);
++ALLY_JS_RC_POINT(axis_xy_left, move, 3);
++ALLY_JS_RC_POINT(axis_xy_left, move, 4);
++ALLY_JS_RC_POINT(axis_xy_left, response, 1);
++ALLY_JS_RC_POINT(axis_xy_left, response, 2);
++ALLY_JS_RC_POINT(axis_xy_left, response, 3);
++ALLY_JS_RC_POINT(axis_xy_left, response, 4);
++
++ALLY_JS_RC_POINT(axis_xy_right, move, 1);
++ALLY_JS_RC_POINT(axis_xy_right, move, 2);
++ALLY_JS_RC_POINT(axis_xy_right, move, 3);
++ALLY_JS_RC_POINT(axis_xy_right, move, 4);
++ALLY_JS_RC_POINT(axis_xy_right, response, 1);
++ALLY_JS_RC_POINT(axis_xy_right, response, 2);
++ALLY_JS_RC_POINT(axis_xy_right, response, 3);
++ALLY_JS_RC_POINT(axis_xy_right, response, 4);
++
+ static struct attribute *axis_xy_left_attrs[] = {
+ 	&dev_attr_axis_xy_left_anti_deadzone.attr,
+ 	&dev_attr_axis_xy_left_deadzone.attr,
+ 	&dev_attr_axis_xyz_deadzone_index.attr,
++	&dev_attr_axis_xy_left_move_1.attr,
++	&dev_attr_axis_xy_left_move_2.attr,
++	&dev_attr_axis_xy_left_move_3.attr,
++	&dev_attr_axis_xy_left_move_4.attr,
++	&dev_attr_axis_xy_left_response_1.attr,
++	&dev_attr_axis_xy_left_response_2.attr,
++	&dev_attr_axis_xy_left_response_3.attr,
++	&dev_attr_axis_xy_left_response_4.attr,
+ 	NULL
+ };
+ static const struct attribute_group axis_xy_left_attr_group = {
+@@ -724,6 +815,14 @@ static struct attribute *axis_xy_right_attrs[] = {
+ 	&dev_attr_axis_xy_right_anti_deadzone.attr,
+ 	&dev_attr_axis_xy_right_deadzone.attr,
+ 	&dev_attr_axis_xyz_deadzone_index.attr,
++	&dev_attr_axis_xy_right_move_1.attr,
++	&dev_attr_axis_xy_right_move_2.attr,
++	&dev_attr_axis_xy_right_move_3.attr,
++	&dev_attr_axis_xy_right_move_4.attr,
++	&dev_attr_axis_xy_right_response_1.attr,
++	&dev_attr_axis_xy_right_response_2.attr,
++	&dev_attr_axis_xy_right_response_3.attr,
++	&dev_attr_axis_xy_right_response_4.attr,
+ 	NULL
+ };
+ static const struct attribute_group axis_xy_right_attr_group = {
+@@ -919,6 +1018,9 @@ static ssize_t _gamepad_apply_all(struct hid_device *hdev, struct ally_gamepad_c
+ 	if (ret < 0)
+ 		return ret;
+ 	ret = _gamepad_apply_js_ADZ(hdev, ally_cfg);
++	if (ret < 0)
++		return ret;
++	ret =_gamepad_apply_response_curves(hdev, ally_cfg);
+ 	if (ret < 0)
+ 		return ret;
+ 
+@@ -1166,6 +1268,7 @@ static struct ally_gamepad_cfg *ally_gamepad_cfg_create(struct hid_device *hdev)
+ 	ally_cfg->vibration_intensity[1] = 0x64;
+ 	_gamepad_set_deadzones_default(ally_cfg);
+ 	_gamepad_set_anti_deadzones_default(ally_cfg);
++	_gamepad_set_js_response_curves_default(ally_cfg);
+ 
+ 	drvdata.gamepad_cfg = ally_cfg; // Must asign before attr group setup
+ 	if (sysfs_create_groups(&hdev->dev.kobj, gamepad_device_attr_groups)) {
+--- drivers/hid/hid-asus-ally.c
++++ drivers/hid/hid-asus-ally.c
+@@ -275,6 +275,28 @@ struct response_curve {
+ 	uint8_t response_pct_4;
+ } __packed;
+ 
++struct js_axis_calibrations {
++	uint16_t left_y_stable;
++	uint16_t left_y_min;
++	uint16_t left_y_max;
++	uint16_t left_x_stable;
++	uint16_t left_x_min;
++	uint16_t left_x_max;
++	uint16_t right_y_stable;
++	uint16_t right_y_min;
++	uint16_t right_y_max;
++	uint16_t right_x_stable;
++	uint16_t right_x_min;
++	uint16_t right_x_max;
++} __packed;
++
++struct tr_axis_calibrations {
++	uint16_t left_stable;
++	uint16_t left_max;
++	uint16_t right_stable;
++	uint16_t right_max;
++} __packed;
++
+ /* ROG Ally has many settings related to the gamepad, all using the same n-key endpoint */
+ struct ally_gamepad_cfg {
+ 	struct hid_device *hdev;
+@@ -302,6 +324,9 @@ struct ally_gamepad_cfg {
+ 	/* joystick response curves */
+ 	struct response_curve ls_rc;
+ 	struct response_curve rs_rc;
++
++	struct js_axis_calibrations js_cal;
++	struct tr_axis_calibrations tr_cal;
+ };
+ 
+ /* The hatswitch outputs integers, we use them to index this X|Y pair */
+@@ -379,6 +404,18 @@ static struct ally_drvdata {
+ 	struct ally_rgb_data led_rgb_data;
+ } drvdata;
+ 
++static void reverse_bytes_in_pairs(u8 *buf, size_t size) {
++	uint16_t *word_ptr;
++	size_t i;
++
++	for (i = 0; i < size; i += 2) {
++		if (i + 1 < size) {
++			word_ptr = (uint16_t *)&buf[i];
++			*word_ptr = cpu_to_be16(*word_ptr);
++		}
++	}
++}
++
+ static int asus_dev_get_report(struct hid_device *hdev, u8 *out_buf, size_t out_buf_size)
+ {
+ 	return hid_hw_raw_request(hdev, FEATURE_REPORT_ID, out_buf, out_buf_size,
+@@ -792,6 +829,63 @@ ALLY_JS_RC_POINT(axis_xy_right, response, 2);
+ ALLY_JS_RC_POINT(axis_xy_right, response, 3);
+ ALLY_JS_RC_POINT(axis_xy_right, response, 4);
+ 
++/* CALIBRATIONS ***********************************************************************************/
++static int gamepad_get_calibration(struct hid_device *hdev)
++{
++	struct ally_gamepad_cfg *ally_cfg = drvdata.gamepad_cfg;
++	u8 *hidbuf;
++	int ret, i;
++
++	if (!drvdata.gamepad_cfg)
++		return -ENODEV;
++
++	hidbuf = kzalloc(FEATURE_ROG_ALLY_REPORT_SIZE, GFP_KERNEL);
++	if (!hidbuf)
++		return -ENOMEM;
++
++	for (i = 0; i < 2; i++) {
++		hidbuf[0] = FEATURE_ROG_ALLY_REPORT_ID;
++		hidbuf[1] = 0xD0;
++		hidbuf[2] = 0x03;
++		hidbuf[3] = i + 1; // 0x01 JS, 0x02 TR
++		hidbuf[4] = 0x20;
++
++		ret = asus_dev_set_report(hdev, hidbuf, FEATURE_ROG_ALLY_REPORT_SIZE);
++		if (ret < 0) {
++			hid_warn(hdev, "ROG Ally check failed set report: %d\n", ret);
++			goto cleanup;
++		}
++
++		memset(hidbuf, 0, FEATURE_ROG_ALLY_REPORT_SIZE);
++		ret = asus_dev_get_report(hdev, hidbuf, FEATURE_ROG_ALLY_REPORT_SIZE);
++		if (ret < 0 || hidbuf[5] != 1) {
++			hid_warn(hdev, "ROG Ally check failed get report: %d\n", ret);
++			goto cleanup;
++		}
++
++		if (i == 0) {
++			/* Joystick calibration */
++			reverse_bytes_in_pairs(&hidbuf[6], sizeof(struct js_axis_calibrations));
++			ally_cfg->js_cal = *(struct js_axis_calibrations *)&hidbuf[6];
++			print_hex_dump(KERN_INFO, "HID Buffer JS: ", DUMP_PREFIX_OFFSET, 16, 1, hidbuf, 32, true);
++			struct js_axis_calibrations *cal = &drvdata.gamepad_cfg->js_cal;
++			pr_err("LS_CAL: X: %d, Min: %d, Max: %d", cal->left_x_stable, cal->left_x_min, cal->left_x_max);
++			pr_err("LS_CAL: Y: %d, Min: %d, Max: %d", cal->left_y_stable, cal->left_y_min, cal->left_y_max);
++			pr_err("RS_CAL: X: %d, Min: %d, Max: %d", cal->right_x_stable, cal->right_x_min, cal->right_x_max);
++			pr_err("RS_CAL: Y: %d, Min: %d, Max: %d", cal->right_y_stable, cal->right_y_min, cal->right_y_max);
++		} else {
++			/* Trigger calibration */
++			reverse_bytes_in_pairs(&hidbuf[6], sizeof(struct tr_axis_calibrations));
++			ally_cfg->tr_cal = *(struct tr_axis_calibrations *)&hidbuf[6];
++			print_hex_dump(KERN_INFO, "HID Buffer TR: ", DUMP_PREFIX_OFFSET, 16, 1, hidbuf, 32, true);
++		}
++	}
++
++cleanup:
++	kfree(hidbuf);
++	return ret;
++}
++
+ static struct attribute *axis_xy_left_attrs[] = {
+ 	&dev_attr_axis_xy_left_anti_deadzone.attr,
+ 	&dev_attr_axis_xy_left_deadzone.attr,
+@@ -1263,6 +1357,7 @@ static struct ally_gamepad_cfg *ally_gamepad_cfg_create(struct hid_device *hdev)
+ 	ally_cfg->key_mapping[ally_cfg->mode - 1].btn_m1.button = BTN_KB_M1;
+ 	ally_cfg->key_mapping[ally_cfg->mode - 1].btn_m2.button = BTN_KB_M2;
+ 	_gamepad_apply_btn_pair(hdev, ally_cfg, btn_pair_m1_m2);
++	gamepad_get_calibration(hdev);
+ 
+ 	ally_cfg->vibration_intensity[0] = 0x64;
+ 	ally_cfg->vibration_intensity[1] = 0x64;
+--- drivers/hid/hid-asus-ally.c
++++ drivers/hid/hid-asus-ally.c
+@@ -19,6 +19,8 @@
+ #include "hid-ids.h"
+ #include "hid-asus-ally.h"
+ 
++#define DEBUG
++
+ #define READY_MAX_TRIES 3
+ #define FEATURE_REPORT_ID 0x0d
+ #define FEATURE_ROG_ALLY_REPORT_ID 0x5a

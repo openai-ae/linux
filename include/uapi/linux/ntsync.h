@@ -28,6 +28,26 @@ struct ntsync_event_args {
 	__u32 signaled;
 };
 
+struct ntsync_mutex_args {
+	__u32 owner;
+	__u32 count;
+};
+
+struct ntsync_event_args {
+	__u32 manual;
+	__u32 signaled;
+};
+
+struct ntsync_mutex_args {
+	__u32 owner;
+	__u32 count;
+};
+
+struct ntsync_event_args {
+	__u32 manual;
+	__u32 signaled;
+};
+
 #define NTSYNC_WAIT_REALTIME	0x1
 
 struct ntsync_wait_args {

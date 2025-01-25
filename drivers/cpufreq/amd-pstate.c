@@ -209,7 +209,6 @@ static inline s16 amd_pstate_get_epp(struct amd_cpudata *cpudata)
 
 static s16 shmem_get_epp(struct amd_cpudata *cpudata)
 {
-	u64 epp;
 	int ret;
 
 	ret = cppc_get_epp_perf(cpudata->cpu, &epp);
@@ -299,11 +298,19 @@ static inline int amd_pstate_set_epp(struct amd_cpudata *cpudata, u32 epp)
 
 static int shmem_set_epp(struct amd_cpudata *cpudata, u32 epp)
 {
+	u64 epp;
 	int ret;
 	struct cppc_perf_ctrls perf_ctrls;
 
 	if (epp == cpudata->epp_cached)
 		return 0;
+
+	if (trace_amd_pstate_epp_perf_enabled()) {
+		trace_amd_pstate_epp_perf(cpudata->cpu, cpudata->highest_perf, epp,
+					  cpudata->min_limit_perf,
+					  cpudata->max_limit_perf,
+					  policy->boost_enabled);
+	}
 
 	perf_ctrls.energy_perf = epp;
 	ret = cppc_set_epp_perf(cpudata->cpu, &perf_ctrls, 1);

@@ -106,6 +106,18 @@ struct futex_wait_block {
 	__u32 bitset;
 };
 
+/**
+ * struct futex_wait_block - Block of futexes to be waited for
+ * @uaddr:	User address of the futex
+ * @val:	Futex value expected by userspace
+ * @bitset:	Bitset for the optional bitmasked wakeup
+ */
+struct futex_wait_block {
+	__u32 __user *uaddr;
+	__u32 val;
+	__u32 bitset;
+};
+
 /*
  * Support for robust futexes: the kernel cleans up held futexes at
  * thread exit time.

@@ -100,7 +100,7 @@ extern int mmap_rnd_compat_bits __read_mostly;
 
 #ifndef DIRECT_MAP_PHYSMEM_END
 # ifdef MAX_PHYSMEM_BITS
-# define DIRECT_MAP_PHYSMEM_END	((1ULL << MAX_PHYSMEM_BITS) - 1)
+# define DIRECT_MAP_PHYSMEM_END	(phys_addr_t)((1ULL << MAX_PHYSMEM_BITS) - 1)
 # else
 # define DIRECT_MAP_PHYSMEM_END	(((phys_addr_t)-1)&~(1ULL<<63))
 # endif
@@ -205,6 +205,14 @@ static inline void __mm_zero_struct_page(struct page *page)
 #define DEFAULT_MAX_MAP_COUNT	(USHRT_MAX - MAPCOUNT_ELF_CORE_MARGIN)
 
 extern int sysctl_max_map_count;
+
+extern bool sysctl_workingset_protection;
+extern u8 sysctl_anon_min_ratio;
+extern u8 sysctl_clean_low_ratio;
+extern u8 sysctl_clean_min_ratio;
+int vm_workingset_protection_update_handler(
+	const struct ctl_table *table, int write,
+	void __user *buffer, size_t *lenp, loff_t *ppos);
 
 extern unsigned long sysctl_user_reserve_kbytes;
 extern unsigned long sysctl_admin_reserve_kbytes;
@@ -2479,6 +2487,43 @@ static inline void unmap_shared_mapping_range(struct address_space *mapping,
 
 static inline struct vm_area_struct *vma_lookup(struct mm_struct *mm,
 						unsigned long addr);
+
+#if 1 /* IS_ENABLED(CONFIG_AUFS_FS) */
+extern void vma_do_file_update_time(struct vm_area_struct *, const char[], int);
+extern struct file *vma_do_pr_or_file(struct vm_area_struct *, const char[],
+				      int);
+extern void vma_do_get_file(struct vm_area_struct *, const char[], int);
+extern void vma_do_fput(struct vm_area_struct *, const char[], int);
+
+#define vma_file_update_time(vma)	vma_do_file_update_time(vma, __func__, \
+								__LINE__)
+#define vma_pr_or_file(vma)		vma_do_pr_or_file(vma, __func__, \
+							  __LINE__)
+#define vma_get_file(vma)		vma_do_get_file(vma, __func__, __LINE__)
+#define vma_fput(vma)			vma_do_fput(vma, __func__, __LINE__)
+
+#ifndef CONFIG_MMU
+extern struct file *vmr_do_pr_or_file(struct vm_region *, const char[], int);
+extern void vmr_do_fput(struct vm_region *, const char[], int);
+
+#define vmr_pr_or_file(region)		vmr_do_pr_or_file(region, __func__, \
+							  __LINE__)
+#define vmr_fput(region)		vmr_do_fput(region, __func__, __LINE__)
+#endif /* !CONFIG_MMU */
+
+#else
+
+#define vma_file_update_time(vma)	file_update_time((vma)->vm_file)
+#define vma_pr_or_file(vma)		(vma)->vm_file
+#define vma_get_file(vma)		get_file((vma)->vm_file)
+#define vma_fput(vma)			fput((vma)->vm_file)
+
+#ifndef CONFIG_MMU
+#define vmr_pr_or_file(region)		(region)->vm_file
+#define vmr_fput(region)		fput((region)->vm_file)
+#endif /* !CONFIG_MMU */
+
+#endif /* CONFIG_AUFS_FS */
 
 extern int access_process_vm(struct task_struct *tsk, unsigned long addr,
 		void *buf, int len, unsigned int gup_flags);
