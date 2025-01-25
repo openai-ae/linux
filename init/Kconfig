@@ -664,6 +664,7 @@ config TASK_IO_ACCOUNTING
 
 config PSI
 	bool "Pressure stall information tracking"
+	depends on !SCHED_ALT
 	select KERNFS
 	help
 	  Collect metrics that indicate how overcommitted the CPU, memory,
@@ -829,6 +830,7 @@ menu "Scheduler features"
 config UCLAMP_TASK
 	bool "Enable utilization clamping for RT/FAIR tasks"
 	depends on CPU_FREQ_GOV_SCHEDUTIL
+	depends on !SCHED_ALT
 	help
 	  This feature enables the scheduler to track the clamped utilization
 	  of each CPU based on RUNNABLE tasks scheduled on that CPU.
@@ -874,6 +876,35 @@ config UCLAMP_BUCKETS_COUNT
 	  precision.
 
 	  If in doubt, use the default value.
+
+menuconfig SCHED_ALT
+	bool "Alternative CPU Schedulers"
+	default y
+	help
+	  This feature enable alternative CPU scheduler"
+
+if SCHED_ALT
+
+choice
+	prompt "Alternative CPU Scheduler"
+	default SCHED_BMQ
+
+config SCHED_BMQ
+	bool "BMQ CPU scheduler"
+	help
+	  The BitMap Queue CPU scheduler for excellent interactivity and
+	  responsiveness on the desktop and solid scalability on normal
+	  hardware and commodity servers.
+
+config SCHED_PDS
+	bool "PDS CPU scheduler"
+	help
+	  The Priority and Deadline based Skip list multiple queue CPU
+	  Scheduler.
+
+endchoice
+
+endif
 
 endmenu
 
@@ -940,6 +971,7 @@ config NUMA_BALANCING
 	depends on ARCH_SUPPORTS_NUMA_BALANCING
 	depends on !ARCH_WANT_NUMA_VARIABLE_LOCALITY
 	depends on SMP && NUMA && MIGRATION && !PREEMPT_RT
+	depends on !SCHED_ALT
 	help
 	  This option adds support for automatic NUMA aware memory/task placement.
 	  The mechanism is quite primitive and is based on migrating memory when
@@ -1048,6 +1080,7 @@ menuconfig CGROUP_SCHED
 	  tasks.
 
 if CGROUP_SCHED
+if !SCHED_ALT
 config GROUP_SCHED_WEIGHT
 	def_bool n
 
@@ -1085,6 +1118,7 @@ config EXT_GROUP_SCHED
 	select GROUP_SCHED_WEIGHT
 	default y
 
+endif #!SCHED_ALT
 endif #CGROUP_SCHED
 
 config SCHED_MM_CID
@@ -1324,6 +1358,22 @@ config USER_NS
 
 	  If unsure, say N.
 
+config USER_NS_UNPRIVILEGED
+	bool "Allow unprivileged users to create namespaces"
+	default y
+	depends on USER_NS
+	help
+	  When disabled, unprivileged users will not be able to create
+	  new namespaces. Allowing users to create their own namespaces
+	  has been part of several recent local privilege escalation
+	  exploits, so if you need user namespaces but are
+	  paranoid^Wsecurity-conscious you want to disable this.
+
+	  This setting can be overridden at runtime via the
+	  kernel.unprivileged_userns_clone sysctl.
+
+	  If unsure, say Y.
+
 config PID_NS
 	bool "PID Namespaces"
 	default y
@@ -1358,6 +1408,7 @@ config CHECKPOINT_RESTORE
 
 config SCHED_AUTOGROUP
 	bool "Automatic process group scheduling"
+	depends on !SCHED_ALT
 	select CGROUPS
 	select CGROUP_SCHED
 	select FAIR_GROUP_SCHED
@@ -1460,10 +1511,10 @@ choice
 	default CC_OPTIMIZE_FOR_PERFORMANCE
 
 config CC_OPTIMIZE_FOR_PERFORMANCE
-	bool "Optimize for performance (-O2)"
+	bool "Optimize for performance (-O3)"
 	help
 	  This is the default optimization level for the kernel, building
-	  with the "-O2" compiler flag for best performance and most
+	  with the "-O3" compiler flag for best performance and most
 	  helpful compile-time warnings.
 
 config CC_OPTIMIZE_FOR_SIZE

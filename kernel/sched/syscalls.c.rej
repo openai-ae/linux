@@ -1,0 +1,16 @@
+--- kernel/sched/syscalls.c
++++ kernel/sched/syscalls.c
+@@ -357,10 +414,13 @@ static void __setscheduler_params(struct task_struct *p,
+ 
+ 	p->policy = policy;
+ 
++#ifndef CONFIG_SCHED_ALT
+ 	if (dl_policy(policy)) {
+ 		__setparam_dl(p, attr);
+ 	} else if (fair_policy(policy)) {
++#endif /* !CONFIG_SCHED_ALT */
+ 		p->static_prio = NICE_TO_PRIO(attr->sched_nice);
++#ifndef CONFIG_SCHED_ALT
+ 		if (attr->sched_runtime) {
+ 			p->se.custom_slice = 1;
+ 			p->se.slice = clamp_t(u64, attr->sched_runtime,
